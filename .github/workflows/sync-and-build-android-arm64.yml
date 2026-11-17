@@ -154,6 +154,7 @@ jobs:
           dotnet build "$CSPROJ" -t:InstallAndroidDependencies -f "$TFM" \
             -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
             -p:AcceptAndroidSDKLicenses=True
+             dotnet build-server shutdown  
 
       # A fixed signing key is required so each new APK can update the previous
       # install. Without it, every CI run generates a fresh debug key and
