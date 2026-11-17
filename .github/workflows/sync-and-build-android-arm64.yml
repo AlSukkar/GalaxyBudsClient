@@ -157,9 +157,6 @@ jobs:
         run: |
           set -euo pipefail
           dotnet restore "$CSPROJ" --force \
-            --runtime android-arm64 \
-            -p:RuntimeIdentifier=android-arm64 \
-            -p:RuntimeIdentifiers=android-arm64 \
             -p:IsAndroid=true \
             -p:AndroidSdkDirectory="$ANDROID_SDK_DIR"
 
@@ -188,28 +185,12 @@ jobs:
           fi
 
           dotnet publish "$CSPROJ" -f "$TFM" -c Debug --no-restore \
-           --runtime android-arm64 \
-            -p:RuntimeIdentifier=android-arm64 \
-            -p:RuntimeIdentifiers=android-arm64 \
             -p:IsAndroid=true \
             -p:AndroidPackageFormats=apk \
             -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
             -p:DebugType=PdbOnly \
             -p:EmbedAssembliesIntoApk=true \
-            -p:NoDemo=true 
-      - name: Inspect generated source file
-        if: always()
-        shell: bash
-        run: |
-         echo "=== Generated files ==="        
-         find GalaxyBudsClient.Platform/obj -type f -path '*Generated*' -print 2>/dev/null
-
-              echo "=== Generator source files ==="
-              find GalaxyBudsClient.Generators -name '*.cs' -print
-
-              echo "=== Generator-related compiler diagnostics ==="
-              grep -R -E 'CS8784|CS8785|CompiledEnum|Generator' \
-              GalaxyBudsClient.Platform/obj 2>/dev/null | head -200 || true           "${SIGN_ARGS[@]}"
+            -p:NoDemo=true
 
       - name: Publish GitHub release
         env:
