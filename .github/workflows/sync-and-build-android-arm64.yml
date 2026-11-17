@@ -159,19 +159,30 @@ jobs:
       # A fixed signing key is required so each new APK can update the previous
       # install. Without it, every CI run generates a fresh debug key and
       # Android rejects the update (you would have to uninstall first).
+      - name: Decode keystore from secret
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          ls -lh release.keystore
+          # sanity check — should print "Java KeyStore"
+          file release.keystore
+      
       - name: Build Release APK (full version)
+        env:
+          KEY_ALIAS:       ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS:        ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASS:      ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           dotnet publish GalaxyBudsClient.Android/GalaxyBudsClient.Android.csproj \
-          -c Release \
-          -f net10.0-android36.1 \
-          -p:NoDemo=true \
-          -p:AndroidPackageFormats=apk \
-          -p:AndroidKeyStore=true \
-          -p:AndroidSigningKeyStore=release.keystore \
-          -p:AndroidSigningKeyAlias=$KEY_ALIAS \
-          -p:AndroidSigningKeyPass=$KEY_PASS \
-          -p:AndroidSigningStorePass=$STORE_PASS \
-          -o publish/
+            -c Release \
+            -f net10.0-android36.1 \
+            -p:NoDemo=true \
+            -p:AndroidPackageFormats=apk \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore=release.keystore \
+            -p:AndroidSigningKeyAlias="$KEY_ALIAS" \
+            -p:AndroidSigningKeyPass="$KEY_PASS" \
+            -p:AndroidSigningStorePass="$STORE_PASS" \
+            -o publish/
 
       - name: List APKs
         run: find GalaxyBudsClient.Android -name '*.apk' -not -path '*/obj/*' -exec ls -lh {} \;
