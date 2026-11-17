@@ -8,6 +8,12 @@
 
         <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
         <IsRoslynComponent>true</IsRoslynComponent>
+
+        <!-- Source generators are loaded as analyzers and don't need a
+             runtime deps.json. Disabling it removes the file that orphan
+             MSBuild worker nodes were holding open across CI steps,
+             causing MSB4018 "GenerateDepsFile" IOException on publish. -->
+        <GenerateDependencyFile>false</GenerateDependencyFile>
     </PropertyGroup>
 
     <ItemGroup>

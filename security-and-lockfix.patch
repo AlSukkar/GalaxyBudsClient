@@ -1,0 +1,148 @@
+From: AlSukkar <dev@example.com>
+Date: Tue, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] security: bump vulnerable libs across all projects + fix GenerateDepsFile race
+
+This patch does two things:
+
+1. Closes the NU1902/NU1903 vulnerability warnings that NuGet reports
+   during restore across FOUR different csproj files (Tmds.DBus is a
+   direct reference in three of them, not just the main project):
+
+     Tmds.DBus 0.21.2                          GHSA-xrw6-gwf8-vvr9  (high)
+     Tmds.DBus.Protocol 0.21.2                 GHSA-xrw6-gwf8-vvr9  (high)
+     SQLitePCLRaw.lib.e_sqlite3 2.1.11         GHSA-2m69-gcr7-jv3q  (high)
+     SQLitePCLRaw.lib.e_sqlite3.android 2.1.11  GHSA-2m69-gcr7-jv3q  (high)
+     System.Security.Cryptography.Pkcs 9.0.0    GHSA-2fmv-rv2c-59x7  (moderate)
+     System.Security.Cryptography.Pkcs 9.0.0    GHSA-846f-f764-76mx  (high)
+     System.Security.Cryptography.Xml 9.0.0     GHSA-23rf-6693-g89p  (high)
+     System.Security.Cryptography.Xml 9.0.0     (plus ~10 chained advisories)
+
+   - GalaxyBudsClient/GalaxyBudsClient.csproj:
+       * Tmds.DBus 0.21.2 -> 0.21.3 (direct ref)
+       * Add explicit refs to SQLitePCLRaw.bundle_green 2.1.14,
+         SQLitePCLRaw.lib.e_sqlite3.android 2.1.14,
+         System.Security.Cryptography.Pkcs 9.0.21,
+         System.Security.Cryptography.Xml 9.0.18
+         (transitive deps pulled in via EF Core 10.0.3 /
+          Microsoft.AspNet.WebApi.Client 6.0.0; NuGet picks the
+          lowest satisfying version so explicit refs are required).
+   - ThePBone.MprisClient/ThePBone.MprisClient.csproj:
+       * Tmds.DBus 0.21.2 -> 0.21.3 (direct ref)
+   - ThePBone.BlueZNet/ThePBone.BlueZNet.csproj:
+       * Tmds.DBus 0.21.2 -> 0.21.3 (direct ref)
+   - GalaxyBudsClient.Platform.Linux.csproj: NO CHANGE NEEDED.
+     It already uses Tmds.DBus.Protocol 0.21.3 (patched); its
+     vulnerability warnings come transitively through BlueZNet /
+     MprisClient and will disappear once those two are bumped.
+
+   All chosen versions are same-major.minor servicing patches;
+   no API or behavior break.
+
+2. Fixes the intermittent MSB4018 / GenerateDepsFile IOException
+   that was failing the dotnet publish step:
+
+       error MSB4018: The "GenerateDepsFile" task failed unexpectedly.
+       System.IO.IOException: The process cannot access the file
+         '.../GalaxyBudsClient.Generators.deps.json' because it is
+         being used by another process.
+
+   Root cause: the InstallAndroidDependencies step leaves behind
+   orphan MSBuild worker nodes (and VBCSCompiler) that hold the
+   deps.json file handle open. When the publish step then tries to
+   rewrite that file, the OS denies access.
+
+   Fix: set <GenerateDependencyFile>false</GenerateDependencyFile>
+   on the Generators project. Source generators are loaded as
+   analyzers; they never need deps.json at runtime, so not writing
+   it eliminates the file-lock race entirely. (Defense in depth;
+   also add `dotnet build-server shutdown` to the workflow between
+   the two steps - see commit message footer.)
+
+Verify after applying:
+    dotnet nuget locals all --clear
+    dotnet restore GalaxyBudsClient.Android/GalaxyBudsClient.Android.csproj
+    # -> 0 NU1902/NU1903 warnings
+    dotnet publish GalaxyBudsClient.Android/GalaxyBudsClient.Android.csproj \
+      -c Release -f net10.0-android36.1 -p:NoDemo=true -o publish/
+    # -> no MSB4018 / IOException
+
+Recommended companion workflow change (NOT part of this patch since
+the user already has their own yml - apply manually):
+
+    - name: Install Android SDK dependencies
+      run: |
+        dotnet build "$CSPROJ" -t:InstallAndroidDependencies -f "$TFM" \
+          -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
+          -p:AcceptAndroidSDKLicenses=True
+        dotnet build-server shutdown   # <-- ADD THIS LINE
+
+---
+ .../GalaxyBudsClient.Generators.csproj           |  6 ++++++
+ GalaxyBudsClient/GalaxyBudsClient.csproj          | 11 ++++++++++-
+ ThePBone.BlueZNet/ThePBone.BlueZNet.csproj       |  2 +-
+ ThePBone.MprisClient/ThePBone.MprisClient.csproj |  2 +-
+ 4 files changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/GalaxyBudsClient.Generators/GalaxyBudsClient.Generators.csproj b/GalaxyBudsClient.Generators/GalaxyBudsClient.Generators.csproj
+index 31cacae..b338c7c 100644
+--- a/GalaxyBudsClient.Generators/GalaxyBudsClient.Generators.csproj
++++ b/GalaxyBudsClient.Generators/GalaxyBudsClient.Generators.csproj
+@@ -8,6 +8,12 @@
+ 
+         <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+         <IsRoslynComponent>true</IsRoslynComponent>
++
++        <!-- Source generators are loaded as analyzers and don't need a
++             runtime deps.json. Disabling it removes the file that orphan
++             MSBuild worker nodes were holding open across CI steps,
++             causing MSB4018 "GenerateDepsFile" IOException on publish. -->
++        <GenerateDependencyFile>false</GenerateDependencyFile>
+     </PropertyGroup>
+ 
+     <ItemGroup>
+diff --git a/GalaxyBudsClient/GalaxyBudsClient.csproj b/GalaxyBudsClient/GalaxyBudsClient.csproj
+index a4ee220..e53aa25 100644
+--- a/GalaxyBudsClient/GalaxyBudsClient.csproj
++++ b/GalaxyBudsClient/GalaxyBudsClient.csproj
+@@ -128,7 +128,16 @@
+         <PackageReference Include="Serilog.Sinks.Trace" Version="4.0.0" />
+         <!-- Workaround: force include SkiaSharp 3.x libraries for Linux; this is already implicitly the case for other platforms -->
+         <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.1" />
+-        <PackageReference Include="Tmds.DBus" Version="0.21.2" />
++        <PackageReference Include="Tmds.DBus" Version="0.21.3" />
++
++        <!-- Security overrides: force patched versions of transitive deps
++             pulled in via EF Core 10.0.3 / Microsoft.AspNet.WebApi.Client 6.0.0.
++             NuGet picks the lowest satisfying version, so explicit refs are
++             required to lift these above the vulnerable floor. -->
++        <PackageReference Include="SQLitePCLRaw.bundle_green" Version="2.1.14" />
++        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3.android" Version="2.1.14" />
++        <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
++        <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.18" />
+     </ItemGroup>
+ 
+ 
+diff --git a/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj b/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj
+index cb7dd17..f108fe9 100644
+--- a/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj
++++ b/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj
+@@ -17,6 +17,6 @@
+ 
+     <ItemGroup>
+         <PackageReference Include="Serilog" Version="4.3.0" />
+-        <PackageReference Include="Tmds.DBus" Version="0.21.2" />
++        <PackageReference Include="Tmds.DBus" Version="0.21.3" />
+     </ItemGroup>
+ </Project>
+diff --git a/ThePBone.MprisClient/ThePBone.MprisClient.csproj b/ThePBone.MprisClient/ThePBone.MprisClient.csproj
+index 9179bf8..ca4513a 100644
+--- a/ThePBone.MprisClient/ThePBone.MprisClient.csproj
++++ b/ThePBone.MprisClient/ThePBone.MprisClient.csproj
+@@ -11,6 +11,6 @@
+     
+     <ItemGroup>
+       <PackageReference Include="Serilog" Version="4.3.0" />
+-      <PackageReference Include="Tmds.DBus" Version="0.21.2" />
++      <PackageReference Include="Tmds.DBus" Version="0.21.3" />
+     </ItemGroup>
+ </Project>
