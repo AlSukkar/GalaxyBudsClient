@@ -48,7 +48,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null \
+            || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream "${UPSTREAM_BRANCH}"
 
           ORIGINAL_HEAD=$(git rev-parse HEAD)
@@ -133,7 +134,8 @@ jobs:
           echo "Project: $CSPROJ"
           echo "Target framework: $TFM"
           if [ -z "$CSPROJ" ] || [ -z "$TFM" ]; then
-            echo "Could not detect csproj or target framework"; exit 1
+            echo "::error::Could not detect csproj or target framework"
+            exit 1
           fi
           echo "CSPROJ=$CSPROJ" >> "$GITHUB_ENV"
           echo "TFM=$TFM" >> "$GITHUB_ENV"
@@ -154,37 +156,45 @@ jobs:
           dotnet build "$CSPROJ" -t:InstallAndroidDependencies -f "$TFM" \
             -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
             -p:AcceptAndroidSDKLicenses=True
-             dotnet build-server shutdown  
+          dotnet build-server shutdown
 
       # A fixed signing key is required so each new APK can update the previous
       # install. Without it, every CI run generates a fresh debug key and
       # Android rejects the update (you would have to uninstall first).
-      - name: Decode keystore from secret
+      - name: Decode and verify keystore
+        env:
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
-          ls -lh release.keystore
-          file release.keystore  # sanity: should print "Java KeyStore"
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$GITHUB_WORKSPACE/release.keystore"
+          ls -lh "$GITHUB_WORKSPACE/release.keystore"
+          # This proves the file is a valid keystore AND the store password is
+          # correct AND prints the alias(es) it contains so you can compare with
+          # your ANDROID_KEY_ALIAS secret. If this fails, the build never will.
+          keytool -list -keystore "$GITHUB_WORKSPACE/release.keystore" -storepass "$STORE_PASS"
 
       - name: Build Release APK (full version)
         env:
-            KEY_ALIAS:  ${{ secrets.ANDROID_KEY_ALIAS }}
-            KEY_PASS:   ${{ secrets.ANDROID_KEY_PASSWORD }}
-            STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS:  ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS:   ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-            dotnet publish GalaxyBudsClient.Android/GalaxyBudsClient.Android.csproj \
-              -c Release \
-              -f net10.0-android36.1 \
-              -p:NoDemo=true \
-              -p:AndroidPackageFormats=apk \
-              -p:AndroidKeyStore=true \
-              -p:AndroidSigningKeyStore=release.keystore \
-              -p:AndroidSigningKeyAlias="$KEY_ALIAS" \
-              -p:AndroidSigningKeyPass="$KEY_PASS" \
-              -p:AndroidSigningStorePass="$STORE_PASS" \
-              -o publish/
+          dotnet publish "$CSPROJ" \
+            -c Release \
+            -f "$TFM" \
+            -p:NoDemo=true \
+            -p:AndroidPackageFormats=apk \
+            -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/release.keystore" \
+            -p:AndroidSigningKeyAlias="$KEY_ALIAS" \
+            -p:AndroidSigningKeyPass="$KEY_PASS" \
+            -p:AndroidSigningStorePass="$STORE_PASS" \
+            -o publish/
 
       - name: List APKs
-        run: find GalaxyBudsClient.Android -name '*.apk' -not -path '*/obj/*' -exec ls -lh {} \;
+        run: |
+          ls -lh publish/*.apk || true
+          find GalaxyBudsClient.Android -name '*.apk' -not -path '*/obj/*' -exec ls -lh {} \; || true
 
       - name: Publish GitHub release
         env:
@@ -193,11 +203,14 @@ jobs:
           HEAD_SHA: ${{ needs.sync.outputs.head }}
         run: |
           set -euo pipefail
-          APK=$(find GalaxyBudsClient.Android -path '*/bin/*' -name '*-Signed.apk' | head -n1)
+          APK=$(find . -name '*-Signed.apk' -not -path '*/obj/*' | head -n1)
           if [ -z "$APK" ]; then
-            APK=$(find GalaxyBudsClient.Android -path '*/bin/*' -name '*.apk' | head -n1)
+            APK=$(find . -name '*.apk' -not -path '*/obj/*' | head -n1)
           fi
-          if [ -z "$APK" ]; then echo "::error::No APK found"; exit 1; fi
+          if [ -z "$APK" ]; then
+            echo "::error::No APK found"
+            exit 1
+          fi
 
           cp "$APK" "GalaxyBudsClient-${SHORT}.apk"
           ls -lh "GalaxyBudsClient-${SHORT}.apk"
