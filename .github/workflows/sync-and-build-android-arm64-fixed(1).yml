@@ -157,9 +157,11 @@ jobs:
         run: |
           set -euo pipefail
           dotnet restore "$CSPROJ" --force \
-            --runtime android-arm64 \
-            -p:IsAndroid=true \
-            -p:AndroidSdkDirectory="$ANDROID_SDK_DIR"
+  --runtime android-arm64 \
+  -p:RuntimeIdentifier=android-arm64 \
+  -p:RuntimeIdentifiers=android-arm64 \
+  -p:IsAndroid=true \
+  -p:AndroidSdkDirectory="$ANDROID_SDK_DIR"
 
       # A fixed signing key is required so each new APK can update the previous install.
       # Without it, every CI run generates a fresh debug key and Android rejects the update.
