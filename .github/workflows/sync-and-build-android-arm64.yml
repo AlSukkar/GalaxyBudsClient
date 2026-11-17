@@ -68,7 +68,7 @@ jobs:
           UP_SHA=$(git rev-parse "upstream/${UPSTREAM_BRANCH}")
           SHORT=$(git rev-parse --short=7 "upstream/${UPSTREAM_BRANCH}")
 
-          # Paths that cannot affect the Android build (guessed from folder names; edit as needed)
+          # Paths that cannot affect the Android build (edit as needed)
           IRRELEVANT='^(\.github/|docs/|meta/|screenshots/|GalaxyBudsClient\.Tests/|GalaxyBudsClient\.Platform\.(Linux|OSX|Windows|WindowsRT)/|ThePBone\.(BlueZNet|MprisClient)/)|\.md$|^(install\.nsi|FUNDING\.yml|LICENSE|GalaxyBudsClient\.sln\.DotSettings)$'
 
           # The last release tag (build-<upstream sha>) records what was last built.
@@ -138,30 +138,26 @@ jobs:
           echo "CSPROJ=$CSPROJ" >> "$GITHUB_ENV"
           echo "TFM=$TFM" >> "$GITHUB_ENV"
 
+      # Limit the build to arm64-v8a by setting RuntimeIdentifiers LOCALLY in the
+      # csproj. It must NOT be passed with -p: on the command line: a global
+      # RuntimeIdentifier/RuntimeIdentifiers flows into the referenced
+      # netstandard2.0 source-generator project (GalaxyBudsClient.Generators),
+      # which then fails to load (CS8034 "assembly architecture is not
+      # compatible") and the build dies with CS0246 'CompiledEnum' not found.
+      - name: Limit to arm64-v8a
+        run: |
+          sed -i 's|<RuntimeIdentifiers>[^<]*</RuntimeIdentifiers>|<RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>|' "$CSPROJ"
+          grep RuntimeIdentifiers "$CSPROJ"
+
       - name: Install Android SDK dependencies
         run: |
           dotnet build "$CSPROJ" -t:InstallAndroidDependencies -f "$TFM" \
             -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
             -p:AcceptAndroidSDKLicenses=True
 
-      # Remove stale assets, then restore the Android entry project and its
-      # project-reference graph. Do not pass TargetFramework globally:
-      # GalaxyBudsClient.csproj intentionally targets net10.0 while the
-      # Android entry project targets net10.0-android36.1.
-      - name: Clean NuGet assets
-        run: |
-          set -euo pipefail
-          find . -type d -name obj -prune -exec rm -rf {} +
-
-      - name: Restore Android project (arm64-v8a only)
-        run: |
-          set -euo pipefail
-          dotnet restore "$CSPROJ" --force \
-            -p:IsAndroid=true \
-            -p:AndroidSdkDirectory="$ANDROID_SDK_DIR"
-
-      # A fixed signing key is required so each new APK can update the previous install.
-      # Without it, every CI run generates a fresh debug key and Android rejects the update.
+      # A fixed signing key is required so each new APK can update the previous
+      # install. Without it, every CI run generates a fresh debug key and
+      # Android rejects the update (you would have to uninstall first).
       - name: Build APK
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -184,13 +180,19 @@ jobs:
             echo "::warning::No signing secrets set. APK is debug-signed with a throwaway key and cannot update a previous install."
           fi
 
-          dotnet publish "$CSPROJ" -f "$TFM" -c Debug --no-restore \
+          # NOTE: deliberately NO --runtime / RuntimeIdentifier / RuntimeIdentifiers
+          # on the command line - see the comment in the 'Limit to arm64-v8a' step.
+          dotnet publish "$CSPROJ" -f "$TFM" -c Debug \
             -p:IsAndroid=true \
             -p:AndroidPackageFormats=apk \
             -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
             -p:DebugType=PdbOnly \
             -p:EmbedAssembliesIntoApk=true \
-            -p:NoDemo=true
+            -p:NoDemo=true \
+            "${SIGN_ARGS[@]}"
+
+      - name: List APKs
+        run: find GalaxyBudsClient.Android -name '*.apk' -not -path '*/obj/*' -exec ls -lh {} \;
 
       - name: Publish GitHub release
         env:
@@ -214,4 +216,4 @@ jobs:
           gh release create "build-${SHORT}" "GalaxyBudsClient-${SHORT}.apk" \
             --target "$HEAD_SHA" \
             --title "Galaxy Buds Client (upstream ${SHORT})" \
-            --notes "Android build from upstream ${UPSTREAM_REPO}@${SHORT}."
+            --notes "Android arm64-v8a build from upstream ${UPSTREAM_REPO}@${SHORT}."
