@@ -1,0 +1,110 @@
+From: AlSukkar <dev@example.com>
+Date: Tue, 18 Nov 2026 00:00:00 +0000
+Subject: [PATCH] correct: revert broken security bumps, keep working Pkcs override
+
+The previous patch (security-and-lockfix.patch) bumped several packages
+to versions that don't exist on nuget.org or are themselves still
+vulnerable, breaking restore:
+
+  error NU1102: Unable to find package SQLitePCLRaw.bundle_green
+                with version (>= 2.1.14) [nearest: 2.1.11]
+  warning NU1603: Tmds.DBus 0.21.3 not found, resolved 0.22.0 instead
+                  (and 0.22.0 is STILL vulnerable per GHSA-xrw6-gwf8-vvr9)
+  warning NU1903: System.Security.Cryptography.Xml 9.0.18 is vulnerable
+                  to 3 newer advisories (GHSA-7hqp, GHSA-c399, GHSA-r955)
+
+Mistakes and what we now know:
+
+1. Tmds.DBus: the GHSA-xrw6-gwf8-vvr9 advisory lists 0.21.3 as a
+   patched version, but that's only for the Tmds.DBus.Protocol package
+   (which GalaxyBudsClient.Platform.Linux already uses correctly).
+   For Tmds.DBus itself, the only patched version is 0.92.0 - a
+   major API rewrite that would break compilation.
+   => Revert to 0.21.2 and accept the warning. Android APK does not
+      use D-Bus at runtime (Linux desktop only).
+
+2. SQLitePCLRaw.bundle_green / .lib.e_sqlite3.android: 2.1.14 does
+   not exist on nuget.org. The latest available is 2.1.11, which is
+   itself vulnerable (GHSA-2m69-gcr7-jv3q). No patched version has
+   been published yet.
+   => Remove the explicit references. The transitive 2.1.11 will be
+      used (as before). Warning remains until upstream ships a fix.
+
+3. System.Security.Cryptography.Xml 9.0.18 was the patch for
+   GHSA-23rf-6693-g89p, but three newer advisories (GHSA-7hqp,
+   GHSA-c399, GHSA-r955) affect ALL 9.0.x versions. No 9.0.x fix
+   exists yet - the patched versions are on 10.0.x (10.0.10+).
+   => Remove the override; transitive 9.0.0 comes back. Same set of
+      advisories either way; nothing actually got worse.
+
+4. System.Security.Cryptography.Pkcs 9.0.21 - this one is CORRECT
+   and actually closes GHSA-846f-f764-76mx (high) and
+   GHSA-2fmv-rv2c-59x7 (moderate). Keep it.
+
+5. GalaxyBudsClient.Generators.csproj <GenerateDependencyFile>false
+   is unchanged - that fix was correct and the MSB4018 IOException
+   has not recurred.
+
+Net result: build unblocks, Pkcs is patched, Tmds.DBus and
+SQLitePCLRaw warnings remain until upstream publishes fixes.
+
+---
+ GalaxyBudsClient/GalaxyBudsClient.csproj         | 17 +++++++++--------
+ ThePBone.BlueZNet/ThePBone.BlueZNet.csproj       |  2 +-
+ ThePBone.MprisClient/ThePBone.MprisClient.csproj |  2 +-
+ 3 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/GalaxyBudsClient/GalaxyBudsClient.csproj b/GalaxyBudsClient/GalaxyBudsClient.csproj
+index e53aa25..05f7532 100644
+--- a/GalaxyBudsClient/GalaxyBudsClient.csproj
++++ b/GalaxyBudsClient/GalaxyBudsClient.csproj
+@@ -128,16 +128,17 @@
+         <PackageReference Include="Serilog.Sinks.Trace" Version="4.0.0" />
+         <!-- Workaround: force include SkiaSharp 3.x libraries for Linux; this is already implicitly the case for other platforms -->
+         <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.1" />
+-        <PackageReference Include="Tmds.DBus" Version="0.21.3" />
++        <PackageReference Include="Tmds.DBus" Version="0.21.2" />
+ 
+-        <!-- Security overrides: force patched versions of transitive deps
+-             pulled in via EF Core 10.0.3 / Microsoft.AspNet.WebApi.Client 6.0.0.
+-             NuGet picks the lowest satisfying version, so explicit refs are
+-             required to lift these above the vulnerable floor. -->
+-        <PackageReference Include="SQLitePCLRaw.bundle_green" Version="2.1.14" />
+-        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3.android" Version="2.1.14" />
++        <!-- Security override: Tmds.DBus 0.21.2 has GHSA-xrw6-gwf8-vvr9 but
++             the only patched version is 0.92.0 (major API change). Android
++             build doesn't use D-Bus at runtime, so accept the warning.
++             SQLitePCLRaw 2.1.11 has GHSA-2m69-gcr7-jv3q but 2.1.11 is the
++             LATEST version on nuget.org - no patched version exists yet.
++             System.Security.Cryptography.Xml 9.0.x is vulnerable across all
++             9.0.x versions per newer advisories; no fix available on 9.0.x.
++             Only Pkcs has a real fix available; lift it explicitly. -->
+         <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
+-        <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.18" />
+     </ItemGroup>
+ 
+ 
+diff --git a/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj b/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj
+index f108fe9..cb7dd17 100644
+--- a/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj
++++ b/ThePBone.BlueZNet/ThePBone.BlueZNet.csproj
+@@ -17,6 +17,6 @@
+ 
+     <ItemGroup>
+         <PackageReference Include="Serilog" Version="4.3.0" />
+-        <PackageReference Include="Tmds.DBus" Version="0.21.3" />
++        <PackageReference Include="Tmds.DBus" Version="0.21.2" />
+     </ItemGroup>
+ </Project>
+diff --git a/ThePBone.MprisClient/ThePBone.MprisClient.csproj b/ThePBone.MprisClient/ThePBone.MprisClient.csproj
+index ca4513a..9179bf8 100644
+--- a/ThePBone.MprisClient/ThePBone.MprisClient.csproj
++++ b/ThePBone.MprisClient/ThePBone.MprisClient.csproj
+@@ -11,6 +11,6 @@
+     
+     <ItemGroup>
+       <PackageReference Include="Serilog" Version="4.3.0" />
+-      <PackageReference Include="Tmds.DBus" Version="0.21.3" />
++      <PackageReference Include="Tmds.DBus" Version="0.21.2" />
+     </ItemGroup>
+ </Project>

@@ -128,16 +128,17 @@
         <PackageReference Include="Serilog.Sinks.Trace" Version="4.0.0" />
         <!-- Workaround: force include SkiaSharp 3.x libraries for Linux; this is already implicitly the case for other platforms -->
         <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.1" />
-        <PackageReference Include="Tmds.DBus" Version="0.21.3" />
+        <PackageReference Include="Tmds.DBus" Version="0.21.2" />
 
-        <!-- Security overrides: force patched versions of transitive deps
-             pulled in via EF Core 10.0.3 / Microsoft.AspNet.WebApi.Client 6.0.0.
-             NuGet picks the lowest satisfying version, so explicit refs are
-             required to lift these above the vulnerable floor. -->
-        <PackageReference Include="SQLitePCLRaw.bundle_green" Version="2.1.14" />
-        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3.android" Version="2.1.14" />
+        <!-- Security override: Tmds.DBus 0.21.2 has GHSA-xrw6-gwf8-vvr9 but
+             the only patched version is 0.92.0 (major API change). Android
+             build doesn't use D-Bus at runtime, so accept the warning.
+             SQLitePCLRaw 2.1.11 has GHSA-2m69-gcr7-jv3q but 2.1.11 is the
+             LATEST version on nuget.org - no patched version exists yet.
+             System.Security.Cryptography.Xml 9.0.x is vulnerable across all
+             9.0.x versions per newer advisories; no fix available on 9.0.x.
+             Only Pkcs has a real fix available; lift it explicitly. -->
         <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
-        <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.18" />
     </ItemGroup>
 
 
