@@ -1,0 +1,67 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_DIR: ${{ github.workspace }}/android-sdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Uses the exact SDK version pinned in the repo's global.json
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install .NET Android workload
+        run: dotnet workload install android
+
+      # Reads the android target framework from the csproj so it doesn't need hardcoding
+      - name: Detect project and target framework
+        run: |
+          CSPROJ=$(find GalaxyBudsClient.Android -maxdepth 1 -name '*.csproj' | head -n1)
+          TFM=$(grep -oE 'net[0-9]+\.[0-9]+-android' "$CSPROJ" | head -n1)
+          echo "Project: $CSPROJ"
+          echo "Target framework: $TFM"
+          if [ -z "$CSPROJ" ] || [ -z "$TFM" ]; then
+            echo "Could not detect csproj or target framework"; exit 1
+          fi
+          echo "CSPROJ=$CSPROJ" >> "$GITHUB_ENV"
+          echo "TFM=$TFM" >> "$GITHUB_ENV"
+
+      - name: Install Android SDK dependencies
+        run: |
+          dotnet build "$CSPROJ" -t:InstallAndroidDependencies -f "$TFM" \
+            -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
+            -p:AcceptAndroidSDKLicenses=True
+
+      # NotDemo=true removes the "Demo" build variant (confirmed by the maintainer)
+      - name: Build APK
+        run: |
+          dotnet publish "$CSPROJ" -f "$TFM" -c Debug \
+            -p:AndroidPackageFormats=apk \
+            -p:AndroidSdkDirectory="$ANDROID_SDK_DIR" \
+            -p:DebugType=PdbOnly \
+            -p:EmbedAssembliesIntoApk=true \
+            -p:NotDemo=true
+
+      - name: List APKs
+        run: find . -name '*.apk' -not -path './.git/*' -exec ls -lh {} \;
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GalaxyBudsClient-apk
+          path: GalaxyBudsClient.Android/**/*.apk
+          if-no-files-found: error
